@@ -84,10 +84,9 @@ flags.DEFINE_string(
         'The model name to select models among existing MnasNet configurations.'
     ))
 
-flags.DEFINE_string(
-    'mode',
-    default='train_and_eval',
-    help='One of {"train_and_eval", "train", "eval"}.')
+flags.DEFINE_enum('mode', 'train_and_eval',
+                  ['train_and_eval', 'train', 'eval', 'export_only'],
+                  'One of {"train_and_eval", "train", "eval", "export_only"}.')
 
 flags.DEFINE_integer(
     'train_steps',
@@ -211,7 +210,7 @@ flags.DEFINE_integer(
 
 flags.DEFINE_bool(
     'export_moving_average',
-    default=False,
+    default=True,
     help=('Replace variables with corresponding moving average variables in '
           'saved model export.'))
 
@@ -352,20 +351,27 @@ def mnasnet_model_fn(features, labels, mode, params):
   if isinstance(features, dict):
     features = features['feature']
 
+  if mode == tf.estimator.ModeKeys.PREDICT:
+    # Adds an identify node to help TFLite export.
+    features = tf.identity(features, 'float_image_input')
+
   # In most cases, the default data format NCHW instead of NHWC should be
-  # used for a significant performance boost on GPU/TPU. NHWC should be used
+  # used for a significant performance boost on GPU. NHWC should be used
   # only if the network needs to be run on CPU since the pooling operations
-  # are only supported on NHWC.
+  # are only supported on NHWC. TPU uses XLA compiler to figure out best layout.
   if FLAGS.data_format == 'channels_first':
     assert not FLAGS.transpose_input    # channels_first only for GPU
     features = tf.transpose(features, [0, 3, 1, 2])
+    stats_shape = [3, 1, 1]
+  else:
+    stats_shape = [1, 1, 3]
 
   if FLAGS.transpose_input and mode != tf.estimator.ModeKeys.PREDICT:
     features = tf.transpose(features, [3, 0, 1, 2])  # HWCN to NHWC
 
   # Normalize the image to zero mean and unit variance.
-  features -= tf.constant(MEAN_RGB, shape=[1, 1, 3], dtype=features.dtype)
-  features /= tf.constant(STDDEV_RGB, shape=[1, 1, 3], dtype=features.dtype)
+  features -= tf.constant(MEAN_RGB, shape=stats_shape, dtype=features.dtype)
+  features /= tf.constant(STDDEV_RGB, shape=stats_shape, dtype=features.dtype)
 
   has_moving_average_decay = (FLAGS.moving_average_decay > 0)
 
@@ -417,6 +423,8 @@ def mnasnet_model_fn(features, labels, mode, params):
   if mode == tf.estimator.ModeKeys.PREDICT:
     scaffold_fn = None
     if FLAGS.export_moving_average:
+      # If the model is trained with moving average decay, to match evaluation
+      # metrics, we need to export the model using moving average variables.
       restore_checkpoint = tf.train.latest_checkpoint(FLAGS.model_dir)
       variables_to_restore = get_pretrained_variables_to_restore(
           restore_checkpoint, load_moving_average=True)
@@ -703,7 +711,7 @@ def export(est, export_dir, post_quantize=True):
 
   tf.logging.info('Starting to export TFLite.')
   converter = tf.lite.TFLiteConverter.from_saved_model(
-      subfolder, input_arrays=['truediv'], output_arrays=['logits'])
+      subfolder, input_arrays=['float_image_input'], output_arrays=['logits'])
   tflite_model = converter.convert()
   tflite_file = os.path.join(export_dir, FLAGS.model_name + '.tflite')
   tf.gfile.GFile(tflite_file, 'wb').write(tflite_model)
@@ -763,6 +771,10 @@ def main(unused_argv):
       eval_batch_size=FLAGS.eval_batch_size,
       export_to_tpu=FLAGS.export_to_tpu,
       params=params)
+
+  if FLAGS.mode == 'export_only':
+    export(mnasnet_est, FLAGS.export_dir, FLAGS.post_quantize)
+    return
 
   # Input pipelines are slightly different (with regards to shuffling and
   # preprocessing) between training and evaluation.

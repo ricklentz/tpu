@@ -16,7 +16,7 @@
 
 [1] Mingxing Tan, Quoc V. Le
   EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks.
-  ICML'19, arXiv:??
+  ICML'19, https://arxiv.org/abs/1905.11946
 """
 
 from __future__ import absolute_import
@@ -126,7 +126,7 @@ def round_repeats(repeats, global_params):
 
 
 class MBConvBlock(object):
-  """A class of MBConv: Mobile Inveretd Residual Bottleneck.
+  """A class of MBConv: Mobile Inverted Residual Bottleneck.
 
   Attributes:
     has_se: boolean. Whether the block contains a Squeeze and Excitation layer
@@ -144,7 +144,8 @@ class MBConvBlock(object):
     self._block_args = block_args
     self._batch_norm_momentum = global_params.batch_norm_momentum
     self._batch_norm_epsilon = global_params.batch_norm_epsilon
-    if global_params.data_format == 'channels_first':
+    self._data_format = global_params.data_format
+    if self._data_format == 'channels_first':
       self._channel_axis = 1
       self._spatial_dims = [2, 3]
     else:
@@ -172,6 +173,7 @@ class MBConvBlock(object):
           strides=[1, 1],
           kernel_initializer=conv_kernel_initializer,
           padding='same',
+          data_format=self._data_format,
           use_bias=False)
       self._bn0 = batchnorm(
           axis=self._channel_axis,
@@ -185,6 +187,7 @@ class MBConvBlock(object):
         strides=self._block_args.strides,
         depthwise_initializer=conv_kernel_initializer,
         padding='same',
+        data_format=self._data_format,
         use_bias=False)
     self._bn1 = batchnorm(
         axis=self._channel_axis,
@@ -201,6 +204,7 @@ class MBConvBlock(object):
           strides=[1, 1],
           kernel_initializer=conv_kernel_initializer,
           padding='same',
+          data_format=self._data_format,
           use_bias=True)
       self._se_expand = tf.layers.Conv2D(
           filters,
@@ -208,6 +212,7 @@ class MBConvBlock(object):
           strides=[1, 1],
           kernel_initializer=conv_kernel_initializer,
           padding='same',
+          data_format=self._data_format,
           use_bias=True)
 
     # Output phase:
@@ -218,6 +223,7 @@ class MBConvBlock(object):
         strides=[1, 1],
         kernel_initializer=conv_kernel_initializer,
         padding='same',
+        data_format=self._data_format,
         use_bias=False)
     self._bn2 = batchnorm(
         axis=self._channel_axis,
@@ -341,6 +347,7 @@ class Model(tf.keras.Model):
         strides=[2, 2],
         kernel_initializer=conv_kernel_initializer,
         padding='same',
+        data_format=self._global_params.data_format,
         use_bias=False)
     self._bn0 = batchnorm(
         axis=channel_axis,
@@ -405,7 +412,8 @@ class Model(tf.keras.Model):
         if drop_rate:
           drop_rate *= float(idx) / len(self._blocks)
           tf.logging.info('block_%s drop_connect_rate: %s' % (idx, drop_rate))
-        outputs = block.call(outputs, training=training)
+        outputs = block.call(
+            outputs, training=training, drop_connect_rate=drop_rate)
         self.endpoints['block_%s' % idx] = outputs
         if is_reduction:
           self.endpoints['reduction_%s' % reduction_idx] = outputs

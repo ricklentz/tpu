@@ -33,6 +33,7 @@ import numpy as np
 import tensorflow as tf
 
 import imagenet_input
+import model_saving_utils
 import resnet_model
 
 # Common flags for TPU models.
@@ -157,9 +158,7 @@ def sparse_top_k_categorical_accuracy(y_true, y_pred, k=5):
     y_true = tf.squeeze(y_true, [-1])
 
   y_true = tf.cast(y_true, 'int32')
-
-  in_top_k_on_device = tf.nn.in_top_k(y_pred, y_true, k)
-  return tf.keras.backend.mean(in_top_k_on_device, axis=-1)
+  return tf.nn.in_top_k(y_pred, y_true, k)
 
 
 def main(unused_argv):
@@ -223,6 +222,8 @@ def main(unused_argv):
       validation_data=imagenet_eval.input_fn(),
       validation_steps=validation_steps,
       validation_freq=5)
+
+  model_saving_utils.save_model(model, model_dir, WEIGHTS_TXT)
 
 if __name__ == '__main__':
   tf.logging.set_verbosity(tf.logging.INFO)
